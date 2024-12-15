@@ -2,13 +2,20 @@ package main
 
 import (
 	"agent/pkg/logger"
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"github.com/gorilla/websocket"
 	"io"
+	"os"
+	"strings"
 	"time"
 )
 
-type Content []byte
+type Message struct {
+	Type string      `json:"type"`
+	Data interface{} `json:"data"`
+}
 type MemoryInfo struct {
 	Total   int `json:"total"`
 	Used    int `json:"used"`
@@ -17,8 +24,10 @@ type MemoryInfo struct {
 }
 
 var log *logger.Logger
+var websocketApi = "ws://127.0.0.1:8097"
+var key string = ""
 
-const websocketApi = "ws://0.0.0.0:8097"
+const agentVersion = "0.0.1"
 
 func init() {
 	var err error
@@ -28,14 +37,15 @@ func init() {
 	}
 }
 
-func sendMessage(content Content, conn *websocket.Conn) {
-	if conn == nil {
-		log.Error("WebSocket 连接未建立")
+func sendMessage(content interface{}, conn *websocket.Conn) {
+	data, err := json.Marshal(content)
+	if err != nil {
+		log.Error("将内容转换为 JSON 时出错: %v", err)
 		return
 	}
-	err := conn.WriteMessage(websocket.TextMessage, content)
+	err = conn.WriteMessage(websocket.TextMessage, data)
 	if err != nil {
-		log.Error(fmt.Sprintf("Error writing message: %v", err))
+		log.Error("发送消息时出错: %v", err)
 		return
 	}
 }
@@ -71,9 +81,6 @@ func reconnect(conn *websocket.Conn) {
 			log.Success("重新连接成功")
 			defer newConn.Close()
 
-			content := Content(`{"type":"hello"}`)
-			sendMessage(content, newConn)
-
 			for {
 				_, message, err := newConn.ReadMessage()
 				if err != nil {
@@ -87,8 +94,39 @@ func reconnect(conn *websocket.Conn) {
 	}
 }
 
+func readInput(prompt string) (string, error) {
+	fmt.Print(prompt)
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(input), nil
+}
+
 func main() {
-	conn, _, err := websocket.DefaultDialer.Dial(websocketApi, nil)
+	fmt.Println("================= 蓝鲸服务器探针 Agent v", agentVersion, " =================")
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Print("主控WebSocket API: ")
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Println("读取输入时出错:", err)
+		return
+	}
+	//websocketApi = strings.TrimSpace(input)
+
+	fmt.Print("通信密钥: ")
+	input, err = reader.ReadString('\n')
+	if err != nil {
+		fmt.Println("读取输入时出错:", err)
+		return
+	}
+	key = strings.TrimSpace(input)
+
+	log.Info("API: %v KEY: %v", websocketApi, key)
+	log.Info("正在尝试连接...")
+	conn, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:8097", nil)
 	if err != nil {
 		log.Error("连接失败: %v\n响应: %v", err)
 		return
@@ -96,9 +134,6 @@ func main() {
 	defer conn.Close()
 
 	log.Success("WebSocket 连接成功")
-
-	content := Content(`{"type":"hello"}`)
-	sendMessage(content, conn)
 
 	for {
 		_, message, err := conn.ReadMessage()
@@ -111,6 +146,30 @@ func main() {
 			handleDisconnect(conn)
 			break
 		}
+
 		log.Info(fmt.Sprintf("接收到消息: %s", message))
+		var jsonData map[string]interface{}
+		err = json.Unmarshal(message, &jsonData)
+		if err != nil {
+			log.Error("解析JSON数据时出错:", err)
+			continue
+		}
+		typeValue := jsonData["type"]
+		switch typeValue {
+		case "hello":
+			content := Message{
+				Type: "hi",
+			}
+			sendMessage(content, conn)
+		case "auth":
+			authData := map[string]string{
+				"key": key,
+			}
+			content := Message{
+				Type: "auth",
+				Data: authData,
+			}
+			sendMessage(content, conn)
+		}
 	}
 }
