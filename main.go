@@ -25,7 +25,8 @@ type MemoryInfo struct {
 
 var log *logger.Logger
 var websocketApi = "ws://127.0.0.1:8097"
-var key string = ""
+var key = ""
+var isAgentInit = false
 
 const agentVersion = "0.0.1"
 
@@ -94,39 +95,67 @@ func reconnect(conn *websocket.Conn) {
 	}
 }
 
-func readInput(prompt string) (string, error) {
-	fmt.Print(prompt)
-	reader := bufio.NewReader(os.Stdin)
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(input), nil
-}
-
 func main() {
-	fmt.Println("================= 蓝鲸服务器探针 Agent v", agentVersion, " =================")
-	reader := bufio.NewReader(os.Stdin)
-
-	fmt.Print("主控WebSocket API: ")
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		fmt.Println("读取输入时出错:", err)
-		return
+	/**
+	 * 检查初始化状态
+	 */
+	// 检查是否存在agent.lock.json文件
+	_, err := os.Stat("agent.lock.json")
+	if err == nil {
+		isAgentInit = true
 	}
-	//websocketApi = strings.TrimSpace(input)
 
-	fmt.Print("通信密钥: ")
-	input, err = reader.ReadString('\n')
-	if err != nil {
-		fmt.Println("读取输入时出错:", err)
-		return
+	/**
+	 * 初始化Agent
+	 */
+	fmt.Printf("\033[32m================= 蓝鲸服务器探针 Agent v%v =================\033[0m\n", agentVersion)
+	fmt.Printf("Github: https://github.com/YunTower/BWhaleMonitor\n")
+	fmt.Printf("项目不断更新中，觉得好用可以点个Star~\n")
+	fmt.Printf("被控端初始化成功后会自动以monitor用户运行\n")
+	fmt.Printf("在服务器上可以通过\"bwmonitor\"命令快速调出控制面板\n")
+	fmt.Printf("\033[32m======================== 初始化被控端 =========================\033[0m\n")
+	if !isAgentInit {
+		reader := bufio.NewReader(os.Stdin)
+
+		fmt.Print("主控WebSocket API: ")
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println("读取输入时出错:", err)
+			return
+		}
+		websocketApi = strings.TrimSpace(input)
+
+		fmt.Print("通信密钥: ")
+		input, err = reader.ReadString('\n')
+		if err != nil {
+			fmt.Println("读取输入时出错:", err)
+			return
+		}
+		key = strings.TrimSpace(input)
+	} else {
+		log.Info("检测到已存在锁定文件，正在尝试读取...")
+		file, err := os.ReadFile("agent.lock.json")
+		if err != nil {
+			log.Error("读取锁定文件时出错:", err)
+			return
+		}
+		var jsonData map[string]interface{}
+		err = json.Unmarshal(file, &jsonData)
+		if err != nil {
+			log.Error("解析JSON数据时出错:", err)
+			return
+		}
+		websocketApi = jsonData["websocket"].(string)
+		key = jsonData["key"].(string)
 	}
-	key = strings.TrimSpace(input)
-
+	fmt.Printf("\033[32m====================== 被控端初始化成功 =======================\033[0m\n")
 	log.Info("API: %v KEY: %v", websocketApi, key)
 	log.Info("正在尝试连接...")
-	conn, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:8097", nil)
+
+	/**
+	 * websocket
+	 */
+	conn, _, err := websocket.DefaultDialer.Dial(websocketApi, nil)
 	if err != nil {
 		log.Error("连接失败: %v\n响应: %v", err)
 		return
@@ -135,6 +164,24 @@ func main() {
 
 	log.Success("WebSocket 连接成功")
 
+	/**
+	 * 定时心跳
+	 */
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+	go func() {
+		for range ticker.C {
+			// 发送心跳消息
+			heartbeatMessage := Message{
+				Type: "hello",
+			}
+			sendMessage(heartbeatMessage, conn)
+		}
+	}()
+
+	/*
+	 * 消息处理
+	 */
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
@@ -147,29 +194,66 @@ func main() {
 			break
 		}
 
-		log.Info(fmt.Sprintf("接收到消息: %s", message))
+		log.Info(fmt.Sprintf("收到消息: %s", message))
 		var jsonData map[string]interface{}
 		err = json.Unmarshal(message, &jsonData)
 		if err != nil {
 			log.Error("解析JSON数据时出错:", err)
 			continue
 		}
+
 		typeValue := jsonData["type"]
-		switch typeValue {
-		case "hello":
-			content := Message{
-				Type: "hi",
+		statusValue, statusExists := jsonData["status"].(string)
+		messageValue, messageExists := jsonData["message"].(string)
+
+		if statusExists && typeValue == "auth" && statusValue == "success" {
+			if !isAgentInit {
+				// 创建锁定文件
+				file, err := os.Create("agent.lock.json")
+				if err != nil {
+					fmt.Println("创建文件时出错:", err)
+					return
+				}
+				// 使用json格式写入密钥
+				_, err = file.Write([]byte(`{"websocket":"` + websocketApi + `","key":"` + key + `"}`))
+				if err != nil {
+					fmt.Println("写入文件时出错:", err)
+					return
+				}
+				defer file.Close()
+				log.Success("初始化成功，已生成锁定文件（如需重新初始化，请删除锁定文件）")
+				isAgentInit = true
 			}
-			sendMessage(content, conn)
-		case "auth":
-			authData := map[string]string{
-				"key": key,
+		}
+
+		if statusExists && messageExists {
+			if statusValue != "success" {
+				log.Warn("[%v][%v] %v", typeValue, statusValue, messageValue)
+				return
+			} else {
+				log.Success("[%v][%v] %v", typeValue, statusValue, messageValue)
 			}
-			content := Message{
-				Type: "auth",
-				Data: authData,
+		}
+
+		if !statusExists {
+			switch typeValue {
+			case "hello":
+				content := Message{
+					Type: "hi",
+				}
+				sendMessage(content, conn)
+			case "auth":
+				authData := map[string]string{
+					"key": key,
+				}
+				content := Message{
+					Type: "auth",
+					Data: authData,
+				}
+				sendMessage(content, conn)
+			default:
+				log.Warn("未知的消息类型:", typeValue)
 			}
-			sendMessage(content, conn)
 		}
 	}
 }
