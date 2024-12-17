@@ -2,12 +2,14 @@ package main
 
 import (
 	"agent/pkg/logger"
+	"agent/pkg/system"
 	"bufio"
 	"encoding/json"
 	"fmt"
 	"github.com/gorilla/websocket"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,6 +18,14 @@ type Message struct {
 	Type string      `json:"type"`
 	Data interface{} `json:"data"`
 }
+
+type CpuInfo struct {
+	Id         int    `json:"id"`
+	Name       string `json:"name"`
+	LogicCount int    `json:"logic_count"`
+	Count      int    `json:"count"`
+}
+
 type MemoryInfo struct {
 	Total   int `json:"total"`
 	Used    int `json:"used"`
@@ -27,6 +37,7 @@ var log *logger.Logger
 var websocketApi = "ws://127.0.0.1:8097"
 var key = ""
 var isAgentInit = false
+var ipv4 string
 
 const agentVersion = "0.0.1"
 
@@ -150,7 +161,11 @@ func main() {
 	}
 	fmt.Printf("\033[32m====================== 被控端初始化成功 =======================\033[0m\n")
 	log.Info("API: %v KEY: %v", websocketApi, key)
+	system := system.System{}
+	ipv4 := system.GetIpv4()
+	log.Info("本机Ipv4: %v", ipv4)
 	log.Info("正在尝试连接...")
+	fmt.Print(system.GetDiskAllPart())
 
 	/**
 	 * websocket
@@ -228,31 +243,47 @@ func main() {
 
 		if statusExists && messageExists {
 			if statusValue != "success" {
-				log.Warn("[%v][%v] %v", typeValue, statusValue, messageValue)
-				return
+				log.Warn("[%        v][%v] %v", typeValue, statusValue, messageValue)
 			} else {
 				log.Success("[%v][%v] %v", typeValue, statusValue, messageValue)
 			}
-		}
-
-		if !statusExists {
-			switch typeValue {
-			case "hello":
-				content := Message{
-					Type: "hi",
+		} else {
+			if !statusExists {
+				switch typeValue {
+				case "hello":
+					content := Message{
+						Type: "hi",
+					}
+					sendMessage(content, conn)
+				case "auth":
+					authData := map[string]string{
+						"key": key,
+					}
+					content := Message{
+						Type: "auth",
+						Data: authData,
+					}
+					sendMessage(content, conn)
+				case "info":
+					cpuInfo, err := json.Marshal(system.GetCpuInfo())
+					if err != nil {
+						log.Error("将CPU信息转换为JSON时出错: %v", err)
+						continue
+					}
+					memoryTotal := system.GetMemoryTotal()
+					systemInfo := map[string]string{
+						"cpu":    string(cpuInfo),
+						"memory": strconv.Itoa(memoryTotal),
+						//"disk":system.disk
+					}
+					content := Message{
+						Type: "info",
+						Data: systemInfo,
+					}
+					sendMessage(content, conn)
+				default:
+					log.Warn("未知的消息类型:", typeValue)
 				}
-				sendMessage(content, conn)
-			case "auth":
-				authData := map[string]string{
-					"key": key,
-				}
-				content := Message{
-					Type: "auth",
-					Data: authData,
-				}
-				sendMessage(content, conn)
-			default:
-				log.Warn("未知的消息类型:", typeValue)
 			}
 		}
 	}

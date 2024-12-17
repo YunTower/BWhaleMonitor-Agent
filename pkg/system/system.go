@@ -95,18 +95,28 @@ func (s *System) GetNetIO() []net.ConnectionStat {
 
 // GetIpv4 获取本机ipv4地址
 func (s *System) GetIpv4() string {
-	resp, err := http.Get("https://api.ipify.org")
-	if err != nil {
-		fmt.Println("请求失败:", err)
-		return ""
-	}
-	defer resp.Body.Close()
-
-	ip, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Println("读取响应失败:", err)
-		return ""
+	urls := []string{
+		"https://api.ipify.org",
+		"https://4.ipw.cn",
 	}
 
-	return string(ip)
+	for _, url := range urls {
+		resp, err := http.Get(url)
+		if err != nil {
+			fmt.Printf("获取 %s 失败: %v\n", url, err)
+			continue
+		}
+		defer resp.Body.Close()
+
+		ip, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			fmt.Printf("获取 %s 响应失败: %v\n", url, err)
+			continue
+		}
+
+		return string(ip)
+	}
+
+	fmt.Println("无法获取服务器IPv4地址")
+	return ""
 }
