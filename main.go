@@ -9,7 +9,7 @@ import (
 	"github.com/gorilla/websocket"
 	"io"
 	"os"
-	"strconv"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -31,6 +31,14 @@ type MemoryInfo struct {
 	Used    int `json:"used"`
 	Free    int `json:"free"`
 	Percent int `json:"used_percent"`
+}
+
+type DiskInfo struct {
+	Path        string  `json:"path"`
+	Total       int     `json:"total"`
+	Free        int     `json:"free"`
+	Used        int     `json:"used"`
+	UsedPercent float64 `json:"used_percent"`
 }
 
 var log *logger.Logger
@@ -106,6 +114,14 @@ func reconnect(conn *websocket.Conn) {
 	}
 }
 
+func marshalJSON(data interface{}) ([]byte, error) {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		log.Error("序列化数据时出错: %v", err)
+	}
+	return jsonData, err
+}
+
 func main() {
 	/**
 	 * 检查初始化状态
@@ -162,10 +178,9 @@ func main() {
 	fmt.Printf("\033[32m====================== 被控端初始化成功 =======================\033[0m\n")
 	log.Info("API: %v KEY: %v", websocketApi, key)
 	system := system.System{}
-	ipv4 := system.GetIpv4()
+	ipv4 := system.GetIpv4(log)
 	log.Info("本机Ipv4: %v", ipv4)
 	log.Info("正在尝试连接...")
-	fmt.Print(system.GetDiskAllPart())
 
 	/**
 	 * websocket
@@ -265,22 +280,40 @@ func main() {
 					}
 					sendMessage(content, conn)
 				case "info":
-					cpuInfo, err := json.Marshal(system.GetCpuInfo())
-					if err != nil {
-						log.Error("将CPU信息转换为JSON时出错: %v", err)
-						continue
+					cpuInfo, _ := marshalJSON(system.GetCpuInfo())
+					memoryInfo := map[string]int{
+						"total": system.GetMemoryTotal(),
 					}
-					memoryTotal := system.GetMemoryTotal()
-					systemInfo := map[string]string{
-						"cpu":    string(cpuInfo),
-						"memory": strconv.Itoa(memoryTotal),
-						//"disk":system.disk
+					memoryTotal, _ := marshalJSON(memoryInfo)
+
+					var diskData []DiskInfo
+					for _, item := range system.GetDiskAllPart() {
+						info := system.GetDiskUsage(item.Device)
+						diskData = append(diskData, DiskInfo{
+							Path:        item.Device,
+							Total:       int(info.Total),
+							Free:        int(info.Free),
+							Used:        int(info.Used),
+							UsedPercent: info.UsedPercent,
+						})
 					}
+
+					DiskList, _ := marshalJSON(diskData)
+
+					systemInfo := map[string]interface{}{
+						"cpu":    json.RawMessage(cpuInfo),
+						"memory": json.RawMessage(memoryTotal),
+						"disk":   json.RawMessage(DiskList),
+						"os":     runtime.GOOS,
+						"arch":   runtime.GOARCH,
+					}
+
 					content := Message{
 						Type: "info",
 						Data: systemInfo,
 					}
 					sendMessage(content, conn)
+
 				default:
 					log.Warn("未知的消息类型:", typeValue)
 				}

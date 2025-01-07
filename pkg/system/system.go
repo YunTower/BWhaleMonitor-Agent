@@ -1,7 +1,7 @@
 package system
 
 import (
-	"fmt"
+	"agent/pkg/logger"
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/disk"
 	"github.com/shirou/gopsutil/host"
@@ -75,6 +75,12 @@ func (s *System) GetCpuInfo() []cpu.InfoStat {
 	return info
 }
 
+// GetDiskPart 获取磁盘分区
+func (s *System) GetDiskPart() []disk.PartitionStat {
+	part, _ := disk.Partitions(false)
+	return part
+}
+
 // GetDiskAllPart 获取磁盘所有分区
 func (s *System) GetDiskAllPart() []disk.PartitionStat {
 	part, _ := disk.Partitions(true)
@@ -87,6 +93,12 @@ func (s *System) GetDiskIO() map[string]disk.IOCountersStat {
 	return io
 }
 
+// GetDiskUsage 获取磁盘使用信息
+func (s *System) GetDiskUsage(path string) *disk.UsageStat {
+	usage, _ := disk.Usage(path)
+	return usage
+}
+
 // GetNetIO 获取当前网络连接信息
 func (s *System) GetNetIO() []net.ConnectionStat {
 	netInfo, _ := net.Connections("all")
@@ -94,29 +106,30 @@ func (s *System) GetNetIO() []net.ConnectionStat {
 }
 
 // GetIpv4 获取本机ipv4地址
-func (s *System) GetIpv4() string {
+func (s *System) GetIpv4(log *logger.Logger) string {
 	urls := []string{
 		"https://api.ipify.org",
 		"https://4.ipw.cn",
 	}
 
+	log.Info("获取本机IPv4...")
 	for _, url := range urls {
 		resp, err := http.Get(url)
 		if err != nil {
-			fmt.Printf("获取 %s 失败: %v\n", url, err)
+			log.Warn("获取IPv4失败，切换接口（url: %s error: %v）", url, err)
 			continue
 		}
 		defer resp.Body.Close()
 
 		ip, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			fmt.Printf("获取 %s 响应失败: %v\n", url, err)
+			log.Error("获取 %s 响应失败: %v\n", url, err)
 			continue
 		}
 
 		return string(ip)
 	}
 
-	fmt.Println("无法获取服务器IPv4地址")
+	log.Error("无法获取服务器IPv4地址")
 	return ""
 }
