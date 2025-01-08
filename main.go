@@ -76,42 +76,6 @@ func handleDisconnect(conn *websocket.Conn) {
 		return
 	}
 	log.Error("WebSocket 连接断开")
-	reconnect(conn)
-}
-
-func reconnect(conn *websocket.Conn) {
-	maxReconnectAttempts := 3
-	attempts := 0
-
-	for {
-		if attempts >= maxReconnectAttempts {
-			log.Error("已达到最大重连次数，请检测主控与被控直接的网络连接状态")
-			return
-		} else {
-			attempts++
-			log.Info("第%v次尝试重新连接...", attempts)
-			time.Sleep(5 * time.Second)
-
-			newConn, resp, err := websocket.DefaultDialer.Dial(websocketApi, nil)
-			if err != nil {
-				log.Error(fmt.Sprintf("重新连接失败: %v\n响应: %v", err, resp))
-				continue
-			}
-
-			log.Success("重新连接成功")
-			defer newConn.Close()
-
-			for {
-				_, message, err := newConn.ReadMessage()
-				if err != nil {
-					log.Error(fmt.Sprintf("读取消息时出错: %v", err))
-					handleDisconnect(newConn)
-					break
-				}
-				log.Info(fmt.Sprintf("接收到消息: %s", message))
-			}
-		}
-	}
 }
 
 func marshalJSON(data interface{}) ([]byte, error) {
@@ -270,6 +234,9 @@ func main() {
 						Type: "hi",
 					}
 					sendMessage(content, conn)
+					break
+
+					// Auth认证
 				case "auth":
 					authData := map[string]string{
 						"key": key,
@@ -279,6 +246,9 @@ func main() {
 						Data: authData,
 					}
 					sendMessage(content, conn)
+					break
+
+					// 上报基础信息
 				case "info":
 					cpuInfo, _ := marshalJSON(system.GetCpuInfo())
 					memoryInfo := map[string]int{
@@ -313,7 +283,13 @@ func main() {
 						Data: systemInfo,
 					}
 					sendMessage(content, conn)
+					break
 
+					// 开启IO定时上报
+					// TODO 开启一个定时器，每分钟上报一次CPU、内存、网络、磁盘IO信息
+				case "io-timer":
+
+					break
 				default:
 					log.Warn("未知的消息类型:", typeValue)
 				}
