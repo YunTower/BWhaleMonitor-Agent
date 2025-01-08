@@ -1,7 +1,7 @@
 package system
 
 import (
-	"agent/pkg/logger"
+	"agent/internal/logger"
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/disk"
 	"github.com/shirou/gopsutil/host"
@@ -63,7 +63,7 @@ func (s *System) GetCpuUsedPercent() int {
 	return int(percent[0])
 }
 
-// GetCpuUsedPercentEach 3s内每个cpu的使用率
+// GetCpuUsedPercentEach 3s内每个cpu核心的使用率
 func (s *System) GetCpuUsedPercentEach() []float64 {
 	percent, _ := cpu.Percent(3*time.Second, true)
 	return percent
